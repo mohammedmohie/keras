@@ -1,3 +1,5 @@
+import functools
+
 import numpy as np
 import openvino as ov
 import openvino.opset15 as ov_opset
@@ -4133,9 +4135,26 @@ def vsplit(x, indices_or_sections):
     return split(x, indices_or_sections, axis=0)
 
 
+def _vmap_fn(fn, in_axes=0):
+    if in_axes != 0:
+        raise ValueError(
+            "Not supported with `vectorize()` with the OpenVINO backend."
+        )
+
+    @functools.wraps(fn)
+    def wrapped(x):
+        from keras.src.backend.openvino.core import vectorized_map
+
+        return vectorized_map(fn, x)
+
+    return wrapped
+
+
 def vectorize(pyfunc, *, excluded=None, signature=None):
-    raise NotImplementedError(
-        "`vectorize` is not supported with openvino backend"
+    from keras.src.backend.common.backend_utils import vectorize_impl
+
+    return vectorize_impl(
+        pyfunc, _vmap_fn, excluded=excluded, signature=signature
     )
 
 
@@ -4207,13 +4226,19 @@ def true_divide(x1, x2):
 
 
 def power(x1, x2):
-    element_type = None
-    if isinstance(x1, OpenVINOKerasTensor):
-        element_type = x1.output.get_element_type()
-    if isinstance(x2, OpenVINOKerasTensor):
-        element_type = x2.output.get_element_type()
-    x1 = get_ov_output(x1, element_type)
-    x2 = get_ov_output(x2, element_type)
+    t1 = (
+        ov_to_keras_type(x1.get_element_type())
+        if hasattr(x1, "get_element_type")
+        else getattr(x1, "dtype", type(x1))
+    )
+    t2 = (
+        ov_to_keras_type(x2.get_element_type())
+        if hasattr(x2, "get_element_type")
+        else getattr(x2, "dtype", type(x2))
+    )
+    target_type = OPENVINO_DTYPES[dtypes.result_type(t1, t2)]
+    x1 = get_ov_output(x1, target_type)
+    x2 = get_ov_output(x2, target_type)
     x1, x2 = _align_operand_types(x1, x2, "power()")
     return OpenVINOKerasTensor(ov_opset.power(x1, x2).output(0))
 
